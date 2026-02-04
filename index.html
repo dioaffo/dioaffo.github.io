@@ -56,35 +56,37 @@
   </style>
 </head>
 <body>
-  <h1>Discord Paste → RollFor Base64 (GitHub Pages / Upload fallback)</h1>
+  <h1>Discord Paste → RollFor Base64</h1>
 
   <div class="card">
-    <h2>1) Upload raid JSONs, then select by raid name</h2>
+    <h2>1) Select Raid </h2>
 
     <div class="controls2">
       <div>
-        <label class="small">Upload one or more raid_###.json files</label>
-        <input id="raidFiles" type="file" accept=".json,application/json" multiple />
+        <label class="small">Select Raid</label>
+        <select id="raidSelect" disabled>
+          <option value="">Loading raid list…</option>
+        </select>
         <div class="small" style="margin-top:6px">
-          Dropdown labels come from each file’s <span class="mono">"name"</span> field (e.g. <span class="mono">"Tower of Karazhan"</span>).
+          This page loads <span class="mono">data/raids.json</span>, then fetches the selected raid JSON from <span class="mono">data/</span>.
         </div>
       </div>
 
       <div>
-        <label class="small">Select Raid</label>
-        <select id="raidSelect" disabled>
-          <option value="">Loading raids…</option>
-        </select>
+        <label class="small">Status</label>
+        <div class="small" id="raidStatus">Loading…</div>
       </div>
     </div>
 
     <div style="margin-top:10px" class="controls2">
       <button id="loadSelectedRaidBtn" disabled>Load Selected Raid</button>
-      <div class="small" id="raidStatus">No raids uploaded.</div>
+      <div class="small">
+        If the raid list fails to load, check that <span class="mono">data/raids.json</span> exists and paths are correct.
+      </div>
     </div>
   </div>
 
-  <div class="row" style="margin-top:12px">
+<div class="row" style="margin-top:12px">
     <div class="card">
       <h2>2) Paste Discord thread text</h2>
       <textarea id="discordInput" placeholder="Paste the Discord thread text here..."></textarea>
@@ -495,57 +497,11 @@
       }
     }
 
-    
     // -----------------------------
-    // Hosted mode (GitHub Pages): load manifest + raid JSON via fetch
+    // Raid list + dropdown (hosted)
     // -----------------------------
-    async function loadRaidManifest(manifestPath = "data/raids.json") {
-      const res = await fetch(manifestPath, { cache: "no-store" });
-      if (!res.ok) throw new Error(`Manifest fetch failed: ${res.status} ${res.statusText}`);
-      const data = await res.json();
-      if (!Array.isArray(data)) throw new Error("Manifest must be a JSON array.");
-      return data;
-    }
+    const MANIFEST_PATH = "data/raids.json";
 
-    async function fetchRaidJson(path) {
-      const res = await fetch(path, { cache: "no-store" });
-      if (!res.ok) throw new Error(`Raid fetch failed (${path}): ${res.status} ${res.statusText}`);
-      return await res.json();
-    }
-
-    async function populateRaidsFromSite() {
-      const status = el("raidStatus");
-      status.textContent = "Loading raid list from site…";
-      status.className = "small";
-
-      // Recordkeeping: treat this as the "session load date" if not using uploads
-      UPLOAD_DATE_STR = formatUploadDate(new Date());
-
-      RAID_MAP.clear();
-      RAID_NAME = null;
-      RAID_ITEMS = null;
-      FUSE = null;
-      el("runBtn").disabled = true;
-
-      const list = await loadRaidManifest("data/raids.json");
-
-      for (const r of list) {
-        if (typeof r?.id !== "number" || !r?.name || !r?.path) continue;
-        RAID_MAP.set(`${r.id}|${r.name}`, { id: r.id, name: r.name, path: r.path, items: null });
-      }
-
-      refreshRaidDropdown();
-
-      if (RAID_MAP.size === 0) {
-        status.textContent = "No raids found in data/raids.json. (Upload still works.)";
-        status.className = "small warn";
-      } else {
-        status.textContent = `Loaded ${RAID_MAP.size} raid(s) from site. Select one and click “Load Selected Raid”.`;
-      }
-    }
-// -----------------------------
-    // Raid upload + dropdown
-    // -----------------------------
     function raidKey(r) { return `${r.id}|${r.name}`; }
 
     function parseRaidJson(raidJson) {
@@ -565,13 +521,25 @@
       return { id, name, items };
     }
 
+    async function fetchJson(path) {
+      const res = await fetch(path, { cache: "no-store" });
+      if (!res.ok) throw new Error(`Fetch failed (${path}): ${res.status} ${res.statusText}`);
+      return await res.json();
+    }
+
+    async function loadRaidManifest() {
+      const list = await fetchJson(MANIFEST_PATH);
+      if (!Array.isArray(list)) throw new Error("Manifest must be a JSON array.");
+      return list;
+    }
+
     function refreshRaidDropdown() {
       const sel = el("raidSelect");
       sel.innerHTML = "";
 
       if (RAID_MAP.size === 0) {
         sel.disabled = true;
-        sel.innerHTML = `<option value="">Load from site or upload files…</option>`;
+        sel.innerHTML = `<option value="">No raids found</option>`;
         el("loadSelectedRaidBtn").disabled = true;
         return;
       }
@@ -580,7 +548,7 @@
       for (const r of raids) {
         const opt = document.createElement("option");
         opt.value = raidKey(r);
-        opt.textContent = r.name; // display name
+        opt.textContent = r.name; // label
         sel.appendChild(opt);
       }
 
@@ -588,13 +556,13 @@
       el("loadSelectedRaidBtn").disabled = false;
     }
 
-    el("raidFiles").addEventListener("change", async () => {
-      const status = el("raidStatus");
-      status.textContent = "Reading raid files…";
-      status.className = "small";
-
-      // Set upload date once per upload action
+    async function initRaidList() {
+      // For recordkeeping: treat "upload date" as "run date" in hosted mode
       UPLOAD_DATE_STR = formatUploadDate(new Date());
+
+      const status = el("raidStatus");
+      status.textContent = "Loading raid list…";
+      status.className = "small";
 
       RAID_MAP.clear();
       RAID_NAME = null;
@@ -602,24 +570,22 @@
       FUSE = null;
       el("runBtn").disabled = true;
 
-      const files = Array.from(el("raidFiles").files || []);
-      try {
-        for (const f of files) {
-          const text = await f.text();
-          const json = JSON.parse(text);
-          const parsed = parseRaidJson(json);
-          RAID_MAP.set(raidKey(parsed), parsed);
-        }
+      const list = await loadRaidManifest();
 
-        refreshRaidDropdown();
-        status.textContent = `Uploaded ${RAID_MAP.size} raid file(s). Select one and click “Load Selected Raid”. (Upload date: ${UPLOAD_DATE_STR})`;
-      } catch (e) {
-        status.textContent = `Error reading raid JSON: ${e?.message ?? e}`;
-        status.className = "small warn";
-        RAID_MAP.clear();
-        refreshRaidDropdown();
+      for (const r of list) {
+        if (!r || typeof r.id !== "number" || !r.name || !r.path) continue;
+        // Store path; load items lazily on selection
+        RAID_MAP.set(`${r.id}|${r.name}`, { id: r.id, name: r.name, path: r.path, items: null });
       }
-    });
+
+      refreshRaidDropdown();
+
+      if (RAID_MAP.size === 0) {
+        status.textContent = `No raids found in ${MANIFEST_PATH}.`;
+      } else {
+        status.textContent = `Loaded ${RAID_MAP.size} raid(s). Select one and click “Load Selected Raid”.`;
+      }
+    }
 
     el("loadSelectedRaidBtn").addEventListener("click", async () => {
       const status = el("raidStatus");
@@ -638,16 +604,10 @@
         const threshold = Number(el("fuseThreshold").value);
         const raid = RAID_MAP.get(key);
 
-        // Hosted-mode raids store {path, items:null} until selected.
-        if (!raid.items && raid.path) {
-          const json = await fetchRaidJson(raid.path);
-          const parsed = parseRaidJson(json);
+        if (!raid.items) {
+          const raidJson = await fetchJson(raid.path);
+          const parsed = parseRaidJson(raidJson);
           raid.items = parsed.items;
-          // keep raid.name/id/path from manifest
-        }
-
-        if (!raid.items || !raid.items.length) {
-          throw new Error("Raid has no items (did the JSON have raidItems?).");
         }
 
         RAID_NAME = raid.name;
@@ -659,13 +619,12 @@
 
         el("runBtn").disabled = false;
       } catch (e) {
-        status.textContent = `Error loading raid: ${e?.message ?? e}`;
+        status.textContent = `Error: ${e?.message ?? e}`;
         status.className = "small warn";
       }
     });
 
-
-    // -----------------------------
+// -----------------------------
     // Run / Clear / Copy
     // -----------------------------
     el("clearBtn").addEventListener("click", () => {
@@ -730,23 +689,13 @@
       if (ok) alert("Copied ML lines.");
     });
   
-    // -----------------------------
-    // Auto: on GitHub Pages, load from site; when opened via file://, uploads still work
-    // -----------------------------
-    (async () => {
-      const proto = window.location.protocol;
-      if (proto === "http:" || proto === "https:") {
-        try {
-          await populateRaidsFromSite();
-        } catch (e) {
-          el("raidStatus").textContent = `Could not load from site (upload still works): ${e?.message ?? e}`;
-          el("raidStatus").className = "small warn";
-          refreshRaidDropdown();
-        }
-      } else {
-        el("raidStatus").textContent = "Local mode detected (file://) — fetch() is blocked by the browser, so use uploads.";
-      }
-    })();
+    // Kick off hosted raid list
+    initRaidList().catch(err => {
+      const status = el("raidStatus");
+      status.textContent = `Could not load ${MANIFEST_PATH}: ${err?.message ?? err}`;
+      status.className = "small warn";
+      refreshRaidDropdown();
+    });
 </script>
 </body>
 </html>
