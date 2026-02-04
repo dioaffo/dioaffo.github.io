@@ -276,6 +276,24 @@
       if (!/[A-Za-z]/.test(item)) return false;
       return true;
     }
+function looksLikeTimeOrDateToken(s) {
+  const t = normalizeLine(s).toLowerCase();
+
+  // Time-only like "1:04 PM" or "01:04pm"
+  if (/^\d{1,2}:\d{2}\s*(am|pm)$/i.test(t)) return true;
+
+  // 24h time like "13:04"
+  if (/^\d{1,2}:\d{2}$/.test(t)) return true;
+
+  // Date-ish like "2/1/2026"
+  if (/^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(t)) return true;
+
+  // Day/month words often present in Discord timestamp lines
+  if (/^(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(t)) return true;
+  if (/^(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)\b/i.test(t)) return true;
+
+  return false;
+}
 
     // -----------------------------
     // Parser: explicit (MS/OS) + fallback (Name - Item)
@@ -294,6 +312,7 @@
           const character = normalizeLine(explicit[1]);
           const prio = explicit[2].toUpperCase();
           const itemText = normalizeLine(explicit[3]);
+          if (looksLikeTimeOrDateToken(itemText)) continue;
 
           if (!isPlausibleCharacterName(character)) continue;
           if (!isPlausibleItemText(itemText)) continue;
@@ -306,6 +325,7 @@
         const parts = raw.split(" - ").map(normalizeLine).filter(Boolean);
         if (parts.length === 2) {
           const [character, itemText] = parts;
+          if (looksLikeTimeOrDateToken(itemText)) continue;
 
           if (!isPlausibleCharacterName(character)) continue;
           if (!isPlausibleItemText(itemText)) continue;
