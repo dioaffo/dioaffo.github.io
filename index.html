@@ -56,7 +56,7 @@
   </style>
 </head>
 <body>
-  <h1>Discord Paste → RollFor Base64 (Upload-only)</h1>
+  <h1>Discord Paste → RollFor Base64 (GitHub Pages / Upload fallback)</h1>
 
   <div class="card">
     <h2>1) Upload raid JSONs, then select by raid name</h2>
@@ -73,7 +73,7 @@
       <div>
         <label class="small">Select Raid</label>
         <select id="raidSelect" disabled>
-          <option value="">Upload files to populate…</option>
+          <option value="">Loading raids…</option>
         </select>
       </div>
     </div>
@@ -495,7 +495,55 @@
       }
     }
 
+    
     // -----------------------------
+    // Hosted mode (GitHub Pages): load manifest + raid JSON via fetch
+    // -----------------------------
+    async function loadRaidManifest(manifestPath = "data/raids.json") {
+      const res = await fetch(manifestPath, { cache: "no-store" });
+      if (!res.ok) throw new Error(`Manifest fetch failed: ${res.status} ${res.statusText}`);
+      const data = await res.json();
+      if (!Array.isArray(data)) throw new Error("Manifest must be a JSON array.");
+      return data;
+    }
+
+    async function fetchRaidJson(path) {
+      const res = await fetch(path, { cache: "no-store" });
+      if (!res.ok) throw new Error(`Raid fetch failed (${path}): ${res.status} ${res.statusText}`);
+      return await res.json();
+    }
+
+    async function populateRaidsFromSite() {
+      const status = el("raidStatus");
+      status.textContent = "Loading raid list from site…";
+      status.className = "small";
+
+      // Recordkeeping: treat this as the "session load date" if not using uploads
+      UPLOAD_DATE_STR = formatUploadDate(new Date());
+
+      RAID_MAP.clear();
+      RAID_NAME = null;
+      RAID_ITEMS = null;
+      FUSE = null;
+      el("runBtn").disabled = true;
+
+      const list = await loadRaidManifest("data/raids.json");
+
+      for (const r of list) {
+        if (typeof r?.id !== "number" || !r?.name || !r?.path) continue;
+        RAID_MAP.set(`${r.id}|${r.name}`, { id: r.id, name: r.name, path: r.path, items: null });
+      }
+
+      refreshRaidDropdown();
+
+      if (RAID_MAP.size === 0) {
+        status.textContent = "No raids found in data/raids.json. (Upload still works.)";
+        status.className = "small warn";
+      } else {
+        status.textContent = `Loaded ${RAID_MAP.size} raid(s) from site. Select one and click “Load Selected Raid”.`;
+      }
+    }
+// -----------------------------
     // Raid upload + dropdown
     // -----------------------------
     function raidKey(r) { return `${r.id}|${r.name}`; }
@@ -523,7 +571,7 @@
 
       if (RAID_MAP.size === 0) {
         sel.disabled = true;
-        sel.innerHTML = `<option value="">Upload files to populate…</option>`;
+        sel.innerHTML = `<option value="">Load from site or upload files…</option>`;
         el("loadSelectedRaidBtn").disabled = true;
         return;
       }
@@ -573,7 +621,7 @@
       }
     });
 
-    el("loadSelectedRaidBtn").addEventListener("click", () => {
+    el("loadSelectedRaidBtn").addEventListener("click", async () => {
       const status = el("raidStatus");
       const key = el("raidSelect").value;
 
@@ -583,18 +631,39 @@
         return;
       }
 
-      const threshold = Number(el("fuseThreshold").value);
-      const raid = RAID_MAP.get(key);
+      try {
+        status.textContent = "Loading selected raid…";
+        status.className = "small";
 
-      RAID_NAME = raid.name;
-      RAID_ITEMS = raid.items;
-      FUSE = makeFuse(RAID_ITEMS, threshold);
+        const threshold = Number(el("fuseThreshold").value);
+        const raid = RAID_MAP.get(key);
 
-      status.textContent = `Loaded: ${RAID_NAME} (${RAID_ITEMS.length} items)`;
-      status.className = "small";
+        // Hosted-mode raids store {path, items:null} until selected.
+        if (!raid.items && raid.path) {
+          const json = await fetchRaidJson(raid.path);
+          const parsed = parseRaidJson(json);
+          raid.items = parsed.items;
+          // keep raid.name/id/path from manifest
+        }
 
-      el("runBtn").disabled = false;
+        if (!raid.items || !raid.items.length) {
+          throw new Error("Raid has no items (did the JSON have raidItems?).");
+        }
+
+        RAID_NAME = raid.name;
+        RAID_ITEMS = raid.items;
+        FUSE = makeFuse(RAID_ITEMS, threshold);
+
+        status.textContent = `Loaded: ${RAID_NAME} (${RAID_ITEMS.length} items)`;
+        status.className = "small";
+
+        el("runBtn").disabled = false;
+      } catch (e) {
+        status.textContent = `Error loading raid: ${e?.message ?? e}`;
+        status.className = "small warn";
+      }
     });
+
 
     // -----------------------------
     // Run / Clear / Copy
@@ -660,6 +729,24 @@
       const ok = await copyToClipboard(el("mlOut").value);
       if (ok) alert("Copied ML lines.");
     });
-  </script>
+  
+    // -----------------------------
+    // Auto: on GitHub Pages, load from site; when opened via file://, uploads still work
+    // -----------------------------
+    (async () => {
+      const proto = window.location.protocol;
+      if (proto === "http:" || proto === "https:") {
+        try {
+          await populateRaidsFromSite();
+        } catch (e) {
+          el("raidStatus").textContent = `Could not load from site (upload still works): ${e?.message ?? e}`;
+          el("raidStatus").className = "small warn";
+          refreshRaidDropdown();
+        }
+      } else {
+        el("raidStatus").textContent = "Local mode detected (file://) — fetch() is blocked by the browser, so use uploads.";
+      }
+    })();
+</script>
 </body>
 </html>
